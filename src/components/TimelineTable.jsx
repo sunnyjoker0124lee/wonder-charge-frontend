@@ -340,15 +340,41 @@ export default function TimelineTable() {
                 </span>
                 <span className="text-sm text-gray-500">{stageTasks.length} 個項目</span>
               </div>
-              <Button
-                onClick={() => handleDeleteStage(stage)}
-                variant="outline"
-                size="sm"
-                className="text-red-600 hover:text-red-700 hover:bg-red-50"
-              >
-                <Trash2 className="w-4 h-4 mr-1" />
-                刪除類型
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => handleDeleteStage(stage)}
+                  variant="outline"
+                  size="sm"
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                >
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  刪除類型
+                </Button>
+                
+                {/* 批量刪除按鈕 - 只有當該階段有選中項目時才顯示 */}
+                {(() => {
+                  const stageSelectedCount = stageTasks.filter(task => selectedTasks.has(task.id)).length
+                  if (stageSelectedCount > 0) {
+                    return (
+                      <Button
+                        onClick={() => {
+                          const stageTaskIds = stageTasks.filter(task => selectedTasks.has(task.id)).map(task => task.id)
+                          if (confirm(`確定要刪除選中的 ${stageSelectedCount} 個項目嗎？此操作無法復原。`)) {
+                            handleBatchDelete()
+                          }
+                        }}
+                        variant="outline"
+                        size="sm"
+                        className="text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+                      >
+                        <Trash2 className="w-4 h-4 mr-1" />
+                        刪除所選項目 ({stageSelectedCount})
+                      </Button>
+                    )
+                  }
+                  return null
+                })()}
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -357,7 +383,6 @@ export default function TimelineTable() {
                   <tr className="border-b bg-gray-50">
                     <th className="text-left p-3 font-medium text-gray-700">選擇</th>
                     <th className="text-left p-3 font-medium text-gray-700">完成</th>
-                    <th className="text-left p-3 font-medium text-gray-700">類型</th>
                     <th className="text-left p-3 font-medium text-gray-700">開始日期</th>
                     <th className="text-left p-3 font-medium text-gray-700">結束日期</th>
                     <th className="text-left p-3 font-medium text-gray-700">項目名稱</th>
@@ -385,25 +410,6 @@ export default function TimelineTable() {
                           onChange={() => handleToggleComplete(task.id)}
                           className="w-4 h-4 text-green-600 bg-gray-100 border-gray-300 rounded focus:ring-green-500"
                         />
-                      </td>
-                      <td className="p-3">
-                        {editingTask?.id === task.id ? (
-                          <select
-                            value={editingTask.stage}
-                            onChange={(e) => setEditingTask({...editingTask, stage: e.target.value})}
-                            className="w-full p-2 border rounded"
-                          >
-                            <option value="">選擇類型</option>
-                            {PREDEFINED_STAGES.map(stage => (
-                              <option key={stage} value={stage}>{stage}</option>
-                            ))}
-                            <option value="新類型">新類型</option>
-                          </select>
-                        ) : (
-                          <span className={`px-2 py-1 rounded text-xs ${STAGE_COLORS[task.stage] || 'bg-gray-100 text-gray-800'}`}>
-                            {task.stage}
-                          </span>
-                        )}
                       </td>
                       <td className="p-3">
                         {editingTask?.id === task.id ? (

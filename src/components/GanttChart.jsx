@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Calendar, Users, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
@@ -18,9 +18,33 @@ export default function GanttChart() {
   const [loading, setLoading] = useState(true)
   const [selectedTask, setSelectedTask] = useState(null)
   const [showIncompleteOnly, setShowIncompleteOnly] = useState(false)
+  const ganttContentRef = useRef(null)
+  const [leftColumnWidth, setLeftColumnWidth] = useState(192) // 12rem = 192px
+  
+  // 可拖動日期光棒相關狀態
+  const [currentViewDate, setCurrentViewDate] = useState(new Date())
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStartX, setDragStartX] = useState(0)
+  const [dragStartDate, setDragStartDate] = useState(new Date())
 
   useEffect(() => {
     fetchTasks()
+    
+    // 監聽視窗大小變化，動態調整左側欄寬度
+    const handleResize = () => {
+      if (ganttContentRef.current) {
+        const leftColumn = ganttContentRef.current.querySelector('.w-48')
+        if (leftColumn) {
+          setLeftColumnWidth(leftColumn.offsetWidth)
+        }
+      }
+    }
+
+    window.addEventListener('resize', handleResize)
+    // 初始化時也執行一次
+    setTimeout(handleResize, 100)
+    
+    return () => window.removeEventListener('resize', handleResize)
   }, [])
 
   const fetchTasks = async () => {
@@ -45,8 +69,51 @@ export default function GanttChart() {
     setSelectedTask(null)
   }
 
+  // 拖動處理函數
+  const handleMouseDown = (e) => {
+    setIsDragging(true)
+    setDragStartX(e.clientX)
+    setDragStartDate(new Date(currentViewDate))
+    e.preventDefault()
+  }
+
+  const handleMouseMove = useCallback((e) => {
+    if (!isDragging || !ganttContentRef.current) return
+    
+    // 使用組件渲染時的時間範圍，確保一致性
+    const ganttRect = ganttContentRef.current.getBoundingClientRect()
+    const ganttWidth = ganttRect.width - leftColumnWidth
+    const deltaX = e.clientX - dragStartX
+    const deltaPercent = (deltaX / ganttWidth) * 100
+    const deltaDays = (deltaPercent / 100) * totalDays
+    
+    const newDate = new Date(dragStartDate)
+    newDate.setDate(dragStartDate.getDate() + Math.round(deltaDays))
+    
+    // 限制在甘特圖範圍內
+    if (newDate >= startDate && newDate <= endDate) {
+      setCurrentViewDate(newDate)
+    }
+  }, [isDragging, dragStartX, dragStartDate, leftColumnWidth, totalDays, startDate, endDate])
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false)
+  }, [])
+
+  // 添加全局鼠標事件監聽
+  useEffect(() => {
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove)
+        document.removeEventListener('mouseup', handleMouseUp)
+      }
+    }
+  }, [isDragging, handleMouseMove, handleMouseUp])
+
   // 計算甘特圖的時間範圍
-  const getDateRange = () => {
+  const getDateRange = useCallback(() => {
     if (tasks.length === 0) return { start: new Date(), end: new Date() }
     
     const dates = tasks.flatMap(task => [
@@ -62,7 +129,7 @@ export default function GanttChart() {
     end.setDate(end.getDate() + 7)
     
     return { start, end }
-  }
+  }, [tasks])
 
   const { start: startDate, end: endDate } = getDateRange()
   const totalDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24))
@@ -179,20 +246,33 @@ export default function GanttChart() {
             </div>
 
             {/* 甘特圖內容 */}
-            <div className="space-y-1 relative">
-              {/* 今日高亮線 */}
+            <div className="space-y-1 relative" ref={ganttContentRef}>
+              {/* 可拖動日期光棒 */}
               {(() => {
-                const today = new Date()
-                if (today >= startDate && today <= endDate) {
-                  const todayPosition = ((today - startDate) / (1000 * 60 * 60 * 24)) / totalDays * 100
+                const viewDate = new Date(currentViewDate)
+                viewDate.setHours(0, 0, 0, 0) // 設置為當天的開始時間
+                
+                if (viewDate >= startDate && viewDate <= endDate) {
+                  // 計算位置：查看日期相對於開始日期的天數除以總天數
+                  const daysFromStart = Math.floor((viewDate - startDate) / (1000 * 60 * 60 * 24))
+                  const datePosition = (daysFromStart / totalDays) * 100
+                  
                   return (
                     <div 
-                      className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 pointer-events-none"
-                      style={{ left: `calc(12rem + ${todayPosition}%)` }}
-                      title={`今日: ${today.toLocaleDateString('zh-TW')}`}
+                      key={`lightbar-${viewDate.getTime()}`}
+                      className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 cursor-col-resize"
+                      style={{ 
+                        left: `${leftColumnWidth}px`,
+                        transform: `translateX(${datePosition}%)`
+                      }}
+                      title={`查看日期: ${viewDate.toLocaleDateString('zh-TW')} (第${daysFromStart + 1}天) - 可拖動`}
                     >
-                      <div className="absolute -top-2 -left-8 bg-red-500 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
-                        今日
+                      <div 
+                        className="absolute -top-2 -left-8 bg-red-500 text-white text-xs px-2 py-1 rounded whitespace-nowrap cursor-grab active:cursor-grabbing select-none"
+                        onMouseDown={handleMouseDown}
+                        style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+                      >
+                        {viewDate.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' })}
                       </div>
                     </div>
                   )
