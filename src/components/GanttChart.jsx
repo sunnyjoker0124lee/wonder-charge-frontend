@@ -80,21 +80,25 @@ export default function GanttChart() {
   const handleMouseMove = useCallback((e) => {
     if (!isDragging || !ganttContentRef.current) return
     
-    // 使用組件渲染時的時間範圍，確保一致性
-    const ganttRect = ganttContentRef.current.getBoundingClientRect()
-    const ganttWidth = ganttRect.width - leftColumnWidth
+    // 獲取當前的時間範圍
+    const { start: currentStartDate, end: currentEndDate } = getDateRange()
+    
+    // 計算拖動距離
     const deltaX = e.clientX - dragStartX
-    const deltaPercent = (deltaX / ganttWidth) * 100
-    const deltaDays = (deltaPercent / 100) * totalDays
+    
+    // 使用固定的30px網格計算（每天30px）
+    const gridWidth = 30
+    const gridsMoved = Math.round(deltaX / gridWidth)
+    const daysMoved = gridsMoved // 每個網格代表1天
     
     const newDate = new Date(dragStartDate)
-    newDate.setDate(dragStartDate.getDate() + Math.round(deltaDays))
+    newDate.setDate(dragStartDate.getDate() + daysMoved)
     
     // 限制在甘特圖範圍內
-    if (newDate >= startDate && newDate <= endDate) {
+    if (newDate >= currentStartDate && newDate <= currentEndDate) {
       setCurrentViewDate(newDate)
     }
-  }, [isDragging, dragStartX, dragStartDate, leftColumnWidth, totalDays, startDate, endDate])
+  }, [isDragging, dragStartX, dragStartDate, getDateRange])
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false)
@@ -139,13 +143,16 @@ export default function GanttChart() {
     const taskStart = new Date(task.startDate)
     const taskEnd = new Date(task.endDate)
     
-    const startOffset = Math.ceil((taskStart - startDate) / (1000 * 60 * 60 * 24))
-    const duration = Math.ceil((taskEnd - taskStart) / (1000 * 60 * 60 * 24)) + 1
+    // 使用固定的30px網格計算（每天30px）
+    const startDays = Math.floor((taskStart - startDate) / (1000 * 60 * 60 * 24))
+    const endDays = Math.floor((taskEnd - startDate) / (1000 * 60 * 60 * 24))
+    const durationDays = endDays - startDays + 1
     
-    const left = (startOffset / totalDays) * 100
-    const width = (duration / totalDays) * 100
+    const gridWidth = 30 // 每天30px
+    const leftPosition = startDays * gridWidth
+    const barWidth = Math.max(durationDays * gridWidth, 30) // 最小寬度30px（一天）
     
-    return { left: `${left}%`, width: `${width}%` }
+    return { left: `${leftPosition}px`, width: `${barWidth}px` }
   }
 
   // 篩選任務
@@ -224,17 +231,20 @@ export default function GanttChart() {
               <div className="w-48 font-medium text-gray-700 p-2">項目名稱</div>
               <div className="flex-1 font-medium text-gray-700">
                 <div className="text-center p-2 border-b">時間軸</div>
-                <div className="flex">
-                  {Array.from({ length: Math.ceil(totalDays / 7) }, (_, weekIndex) => {
-                    const weekStart = new Date(startDate)
-                    weekStart.setDate(startDate.getDate() + weekIndex * 7)
+                <div className="flex" style={{ minWidth: `${totalDays * 30}px` }}>
+                  {Array.from({ length: totalDays }, (_, dayIndex) => {
+                    const currentDay = new Date(startDate)
+                    currentDay.setDate(startDate.getDate() + dayIndex)
                     return (
                       <div 
-                        key={weekIndex} 
-                        className="flex-1 text-xs text-gray-600 p-1 border-r text-center"
-                        style={{ minWidth: '60px' }}
+                        key={dayIndex} 
+                        className="text-xs text-gray-600 p-1 border-r text-center"
+                        style={{ 
+                          width: '30px',
+                          minWidth: '30px'
+                        }}
                       >
-                        {weekStart.toLocaleDateString('zh-TW', { 
+                        {currentDay.toLocaleDateString('zh-TW', { 
                           month: '2-digit', 
                           day: '2-digit' 
                         })}
@@ -250,26 +260,26 @@ export default function GanttChart() {
               {/* 可拖動日期光棒 */}
               {(() => {
                 const viewDate = new Date(currentViewDate)
-                viewDate.setHours(0, 0, 0, 0) // 設置為當天的開始時間
+                viewDate.setHours(0, 0, 0, 0)
                 
                 if (viewDate >= startDate && viewDate <= endDate) {
-                  // 計算位置：查看日期相對於開始日期的天數除以總天數
+                  // 計算光棒位置：相對於父容器（每天30px）
                   const daysFromStart = Math.floor((viewDate - startDate) / (1000 * 60 * 60 * 24))
-                  const datePosition = (daysFromStart / totalDays) * 100
+                  const gridWidth = 30 // 每天30px
+                  const lightbarPosition = leftColumnWidth + (daysFromStart * gridWidth) + (gridWidth / 2) // 置中對齊
                   
                   return (
                     <div 
                       key={`lightbar-${viewDate.getTime()}`}
                       className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 cursor-col-resize"
                       style={{ 
-                        left: `${leftColumnWidth}px`,
-                        transform: `translateX(${datePosition}%)`
+                        left: `${lightbarPosition}px`
                       }}
-                      title={`查看日期: ${viewDate.toLocaleDateString('zh-TW')} (第${daysFromStart + 1}天) - 可拖動`}
+                      onMouseDown={handleMouseDown}
+                      title={`查看日期: ${viewDate.toLocaleDateString('zh-TW')} - 可拖動`}
                     >
                       <div 
                         className="absolute -top-2 -left-8 bg-red-500 text-white text-xs px-2 py-1 rounded whitespace-nowrap cursor-grab active:cursor-grabbing select-none"
-                        onMouseDown={handleMouseDown}
                         style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
                       >
                         {viewDate.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' })}
@@ -305,7 +315,7 @@ export default function GanttChart() {
                               backgroundColor: color,
                               left: position.left,
                               width: position.width,
-                              minWidth: '60px'
+                              minWidth: '30px'
                             }}
                             onClick={() => handleTaskClick(task)}
                             title={`${task.milestone} (${task.startDate} - ${task.endDate})`}
