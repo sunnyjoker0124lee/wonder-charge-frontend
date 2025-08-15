@@ -179,7 +179,27 @@ export default function GanttChart() {
             </div>
 
             {/* 甘特圖內容 */}
-            <div className="space-y-1">
+            <div className="space-y-1 relative">
+              {/* 今日高亮線 */}
+              {(() => {
+                const today = new Date()
+                if (today >= startDate && today <= endDate) {
+                  const todayPosition = ((today - startDate) / (1000 * 60 * 60 * 24)) / totalDays * 100
+                  return (
+                    <div 
+                      className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 pointer-events-none"
+                      style={{ left: `calc(12rem + ${todayPosition}%)` }}
+                      title={`今日: ${today.toLocaleDateString('zh-TW')}`}
+                    >
+                      <div className="absolute -top-2 -left-8 bg-red-500 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                        今日
+                      </div>
+                    </div>
+                  )
+                }
+                return null
+              })()}
+              
               {Object.entries(groupedTasks).map(([stage, stageTasks]) => (
                 <div key={stage}>
                   {/* 類型標題 */}

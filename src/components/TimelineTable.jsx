@@ -27,6 +27,7 @@ export default function TimelineTable() {
   const [loading, setLoading] = useState(true)
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [editingTask, setEditingTask] = useState(null)
+  const [selectedTasks, setSelectedTasks] = useState(new Set())
   const [newTask, setNewTask] = useState({
     stage: '',
     customStage: '',
@@ -177,14 +178,13 @@ export default function TimelineTable() {
     }
   }
 
-  const handleToggleComplete = async (taskId, completed) => {
+  const handleToggleComplete = async (taskId) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+      const response = await fetch(`${API_BASE_URL}/tasks/${taskId}/toggle-complete`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ completed }),
       })
 
       if (response.ok) {
@@ -195,6 +195,59 @@ export default function TimelineTable() {
     } catch (error) {
       console.error('更新完成狀態失敗:', error)
       alert('更新完成狀態失敗，請稍後再試')
+    }
+  }
+
+  const handleSelectTask = (taskId) => {
+    const newSelected = new Set(selectedTasks)
+    if (newSelected.has(taskId)) {
+      newSelected.delete(taskId)
+    } else {
+      newSelected.add(taskId)
+    }
+    setSelectedTasks(newSelected)
+  }
+
+  const handleSelectAllInStage = (stageTasks) => {
+    const stageTaskIds = stageTasks.map(task => task.id)
+    const newSelected = new Set(selectedTasks)
+    const allSelected = stageTaskIds.every(id => newSelected.has(id))
+    
+    if (allSelected) {
+      stageTaskIds.forEach(id => newSelected.delete(id))
+    } else {
+      stageTaskIds.forEach(id => newSelected.add(id))
+    }
+    setSelectedTasks(newSelected)
+  }
+
+  const handleBatchDelete = async () => {
+    if (selectedTasks.size === 0) {
+      alert('請先選擇要刪除的項目')
+      return
+    }
+
+    if (confirm(`確定要刪除選中的 ${selectedTasks.size} 個項目嗎？此操作無法復原。`)) {
+      try {
+        const response = await fetch(`${API_BASE_URL}/tasks/batch-delete`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ taskIds: Array.from(selectedTasks) }),
+        })
+
+        if (response.ok) {
+          setSelectedTasks(new Set())
+          await fetchTasks()
+          alert('批量刪除成功')
+        } else {
+          alert('批量刪除失敗，請稍後再試')
+        }
+      } catch (error) {
+        console.error('批量刪除失敗:', error)
+        alert('批量刪除失敗，請稍後再試')
+      }
     }
   }
 
@@ -241,10 +294,22 @@ export default function TimelineTable() {
       <div className="p-6 border-b">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-2xl font-bold text-gray-800">各項工作時程表清單</h2>
-          <Button onClick={() => setShowAddDialog(true)} className="bg-orange-500 hover:bg-orange-600">
-            <Plus className="w-4 h-4 mr-2" />
-            新增項目
-          </Button>
+          <div className="flex gap-2">
+            {selectedTasks.size > 0 && (
+              <Button 
+                onClick={handleBatchDelete}
+                variant="outline"
+                className="text-red-600 hover:text-red-700 border-red-300 hover:border-red-400"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                刪除選中項目 ({selectedTasks.size})
+              </Button>
+            )}
+            <Button onClick={() => setShowAddDialog(true)} className="bg-orange-500 hover:bg-orange-600">
+              <Plus className="w-4 h-4 mr-2" />
+              新增項目
+            </Button>
+          </div>
         </div>
         
         <div className="flex gap-6 text-sm text-gray-600">
@@ -264,6 +329,12 @@ export default function TimelineTable() {
           <div key={stage} className="mb-8">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={stageTasks.every(task => selectedTasks.has(task.id))}
+                  onChange={() => handleSelectAllInStage(stageTasks)}
+                  className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+                />
                 <span className={`px-3 py-1 rounded-full text-sm font-medium ${STAGE_COLORS[stage] || 'bg-gray-100 text-gray-800'}`}>
                   {stage}
                 </span>
@@ -284,6 +355,7 @@ export default function TimelineTable() {
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="border-b bg-gray-50">
+                    <th className="text-left p-3 font-medium text-gray-700">選擇</th>
                     <th className="text-left p-3 font-medium text-gray-700">完成</th>
                     <th className="text-left p-3 font-medium text-gray-700">類型</th>
                     <th className="text-left p-3 font-medium text-gray-700">開始日期</th>
@@ -301,8 +373,16 @@ export default function TimelineTable() {
                       <td className="p-3">
                         <input
                           type="checkbox"
+                          checked={selectedTasks.has(task.id)}
+                          onChange={() => handleSelectTask(task.id)}
+                          className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                      </td>
+                      <td className="p-3">
+                        <input
+                          type="checkbox"
                           checked={task.completed || false}
-                          onChange={(e) => handleToggleComplete(task.id, e.target.checked)}
+                          onChange={() => handleToggleComplete(task.id)}
                           className="w-4 h-4 text-green-600 bg-gray-100 border-gray-300 rounded focus:ring-green-500"
                         />
                       </td>
