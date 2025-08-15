@@ -1,0 +1,336 @@
+import React, { useMemo, useRef, useEffect, useState, useCallback } from "react";
+
+// 台灣時區偏移（UTC+8）
+const TZ_OFFSET = 8 * 60 * 60 * 1000;
+
+// 關鍵：避免 'YYYY-MM-DD' 被當成 UTC 解析，改用本地（台北）安全解析
+function parseLocalSafe(s) {
+  if (!s) return new Date();
+  
+  // 若是 'YYYY-MM-DD'，用分解法建立本地日期，避免 UTC 偏移
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(.*)?$/);
+  if (m && (!m[4] || m[4] === "")) {
+    const [_, y, mo, d] = m;
+    // 使用本地時間建構，避免UTC問題
+    return new Date(parseInt(y), parseInt(mo) - 1, parseInt(d));
+  }
+  
+  // 其他格式直接解析
+  return new Date(s);
+}
+
+// 格式化日期為 MM/DD
+function formatDate(date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${month}/${day}`;
+}
+
+// 獲取今天的日期（台灣時區）
+function getTodayTW() {
+  return new Date();
+}
+
+// 計算兩個日期之間的天數差
+function daysBetween(date1, date2) {
+  const oneDay = 24 * 60 * 60 * 1000;
+  return Math.round((date2.getTime() - date1.getTime()) / oneDay);
+}
+
+// 添加天數到日期
+function addDays(date, days) {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
+const GanttChart = ({ tasks = [], showIncompleteOnly = false }) => {
+  const headerRef = useRef(null);
+  const bodyRef = useRef(null);
+  const [filteredTasks, setFilteredTasks] = useState([]);
+
+  // 過濾任務
+  useEffect(() => {
+    if (showIncompleteOnly) {
+      setFilteredTasks(tasks.filter(task => !task.completed));
+    } else {
+      setFilteredTasks(tasks);
+    }
+  }, [tasks, showIncompleteOnly]);
+
+  // 計算視圖範圍（顯示前後各2個月）
+  const { viewStart, viewEnd } = useMemo(() => {
+    if (filteredTasks.length === 0) {
+      const today = getTodayTW();
+      const start = new Date(today);
+      start.setMonth(start.getMonth() - 1);
+      const end = new Date(today);
+      end.setMonth(end.getMonth() + 3);
+      
+      return { viewStart: start, viewEnd: end };
+    }
+
+    const allDates = filteredTasks.flatMap(task => [
+      parseLocalSafe(task.start_date),
+      parseLocalSafe(task.end_date)
+    ]);
+    
+    const minDate = new Date(Math.min(...allDates.map(d => d.getTime())));
+    const maxDate = new Date(Math.max(...allDates.map(d => d.getTime())));
+    
+    // 前後各加1個月
+    const start = new Date(minDate);
+    start.setMonth(start.getMonth() - 1);
+    const end = new Date(maxDate);
+    end.setMonth(end.getMonth() + 1);
+    
+    return { viewStart: start, viewEnd: end };
+  }, [filteredTasks]);
+
+  // 1) 統一時區 + 起迄毫秒
+  const startMs = useMemo(() => {
+    const start = new Date(viewStart);
+    start.setHours(0, 0, 0, 0);
+    return start.getTime();
+  }, [viewStart]);
+  
+  const endMs = useMemo(() => {
+    const end = new Date(viewEnd);
+    end.setHours(23, 59, 59, 999);
+    return end.getTime();
+  }, [viewEnd]);
+
+  // 2) 畫布寬度與比例
+  const totalMs = endMs - startMs;
+  const pxPerDay = 30; // 每天30像素，確保精確對齊
+  const pxPerMs = pxPerDay / (24 * 60 * 60 * 1000);
+  const contentWidth = Math.max(1, Math.round(totalMs * pxPerMs));
+
+  // 3) 唯一可信的「日期→像素」函式：header、today、task 全用它
+  const xFromDate = useCallback((dateStr) => {
+    const date = typeof dateStr === "string" ? parseLocalSafe(dateStr) : dateStr;
+    const ms = date.getTime();
+    return (ms - startMs) * pxPerMs;
+  }, [startMs, pxPerMs]);
+
+  // 「今天線」位置（用台灣時區）
+  const todayMs = getTodayTW().getTime();
+  const todayLeft = Math.max(0, Math.min(contentWidth, (todayMs - startMs) * pxPerMs));
+
+  // 4) 滾動同步（header 跟 body）
+  useEffect(() => {
+    const body = bodyRef.current;
+    const header = headerRef.current;
+    if (!body || !header) return;
+    
+    const onScroll = () => { 
+      header.scrollLeft = body.scrollLeft; 
+    };
+    
+    body.addEventListener("scroll", onScroll);
+    return () => body.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // 5) 產生日期刻度（上方時間軸）- 每天一個刻度
+  const days = useMemo(() => {
+    const result = [];
+    const totalDays = Math.ceil(totalMs / (24 * 60 * 60 * 1000));
+    
+    for (let i = 0; i <= totalDays; i++) {
+      const currentDate = addDays(viewStart, i);
+      const left = i * pxPerDay;
+      
+      result.push({
+        date: formatDate(currentDate),
+        left: left,
+        fullDate: currentDate
+      });
+    }
+    
+    return result;
+  }, [viewStart, totalMs, pxPerDay]);
+
+  // 任務類型顏色映射
+  const getTaskColor = (type) => {
+    const colors = {
+      '法規/許可': '#ef4444',
+      '贊助招商': '#3b82f6', 
+      '設計/製作': '#eab308',
+      '公關/宣傳': '#a855f7',
+      '營運/交通': '#22c55e',
+      '活動日': '#ec4899'
+    };
+    return colors[type] || '#6b7280';
+  };
+
+  // 計算任務位置和寬度
+  const processedTasks = useMemo(() => {
+    return filteredTasks.map((task, index) => {
+      const startLeft = xFromDate(task.start_date);
+      const endLeft = xFromDate(task.end_date);
+      const width = Math.max(20, endLeft - startLeft); // 最小寬度20px
+      
+      return {
+        ...task,
+        left: startLeft,
+        width: width,
+        top: 40 + index * 35,
+        color: getTaskColor(task.stage)
+      };
+    });
+  }, [filteredTasks, xFromDate]);
+
+  return (
+    <div className="w-full bg-gray-900 text-white">
+      {/* Header：時間軸（可水平滾動） */}
+      <div 
+        ref={headerRef} 
+        className="overflow-x-auto border-b border-gray-700"
+        style={{ 
+          scrollbarWidth: 'none', 
+          msOverflowStyle: 'none',
+          WebkitScrollbar: { display: 'none' }
+        }}
+      >
+        <div className="relative bg-gray-800" style={{ width: contentWidth, height: 50 }}>
+          {/* 時間軸標籤 */}
+          <div className="absolute top-0 left-0 right-0 h-6 bg-gray-700 flex items-center justify-center text-sm font-medium">
+            時間軸
+          </div>
+          
+          {/* 日期刻度 */}
+          {days.map((day, i) => (
+            <div 
+              key={i} 
+              className="absolute border-l border-gray-600 text-center text-xs"
+              style={{
+                left: day.left,
+                top: 25,
+                width: pxPerDay,
+                height: 25,
+                lineHeight: '25px'
+              }}
+            >
+              {day.date}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Body：任務列（水平滾動內容） */}
+      <div 
+        ref={bodyRef} 
+        className="overflow-x-auto relative"
+        style={{ 
+          height: Math.max(400, processedTasks.length * 35 + 80),
+          scrollbarWidth: 'none', 
+          msOverflowStyle: 'none'
+        }}
+      >
+        <div className="relative" style={{ width: contentWidth }}>
+          {/* 背景網格線 */}
+          {days.map((day, i) => (
+            <div
+              key={`grid-${i}`}
+              className="absolute top-0 bottom-0 border-l border-gray-800"
+              style={{ left: day.left, width: 1 }}
+            />
+          ))}
+
+          {/* 今天紅線 + 紅色日期標籤：一定要放在同一個可滾動容器 */}
+          <div 
+            className="absolute top-0 bottom-0 bg-red-500 pointer-events-none z-10"
+            style={{
+              left: todayLeft,
+              width: 2
+            }} 
+          />
+          <div 
+            className="absolute top-0 text-xs text-white bg-red-500 px-2 py-1 rounded z-10"
+            style={{
+              left: todayLeft - 20,
+              fontSize: 11,
+              fontWeight: 600
+            }}
+          >
+            {formatDate(getTodayTW())}
+          </div>
+
+          {/* 任務分組標籤 */}
+          <div className="absolute left-0 top-0 w-48 bg-gray-800 border-r border-gray-700 z-20">
+            <div className="h-10 bg-gray-700 flex items-center px-4 text-sm font-medium border-b border-gray-600">
+              項目名稱
+            </div>
+            
+            {/* 任務名稱列表 */}
+            {processedTasks.map((task, index) => (
+              <div
+                key={task.id}
+                className="px-4 py-2 border-b border-gray-700 text-sm"
+                style={{ 
+                  height: 35,
+                  lineHeight: '31px',
+                  backgroundColor: index % 2 === 0 ? '#374151' : '#4b5563'
+                }}
+              >
+                <div className="truncate">{task.milestone}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* 任務方塊 */}
+          {processedTasks.map((task) => (
+            <div 
+              key={task.id} 
+              className="absolute rounded-md shadow-lg cursor-pointer transition-all duration-200 hover:shadow-xl"
+              style={{
+                left: Math.max(192, task.left), // 確保不被左側標籤遮擋
+                top: task.top,
+                width: task.width,
+                height: 24,
+                backgroundColor: task.color,
+                border: `1px solid ${task.color}`,
+                zIndex: 5
+              }}
+              title={`${task.milestone}\n${task.start_date} ~ ${task.end_date}`}
+            >
+              {/* 任務名稱 */}
+              <div 
+                className="absolute inset-0 flex items-center px-2 text-white text-xs font-medium truncate"
+                style={{ fontSize: 10 }}
+              >
+                {task.milestone}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 圖例 */}
+      <div className="mt-4 p-4 bg-gray-800 rounded-lg">
+        <h3 className="text-sm font-medium mb-2">類型圖例</h3>
+        <div className="flex flex-wrap gap-4">
+          {Object.entries({
+            '法規/許可': '#ef4444',
+            '贊助招商': '#3b82f6',
+            '設計/製作': '#eab308', 
+            '公關/宣傳': '#a855f7',
+            '營運/交通': '#22c55e',
+            '活動日': '#ec4899'
+          }).map(([type, color]) => (
+            <div key={type} className="flex items-center gap-2">
+              <div 
+                className="w-4 h-4 rounded"
+                style={{ backgroundColor: color }}
+              />
+              <span className="text-sm">{type}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default GanttChart;
+

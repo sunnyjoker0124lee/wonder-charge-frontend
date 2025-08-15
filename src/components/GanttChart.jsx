@@ -1,454 +1,479 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { Calendar, Users, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-const API_BASE_URL = 'https://wonder-charge-backend.onrender.com/api'
+const GanttChart = () => {
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [showOnlyIncomplete, setShowOnlyIncomplete] = useState(false);
+  const [currentDate] = useState(new Date('2025-08-15')); // 今天的日期
+  const chartRef = useRef(null);
+  const timelineRef = useRef(null);
 
-const STAGE_COLORS = {
-  '法規/許可': '#ef4444',
-  '贊助招商': '#3b82f6',
-  '設計/製作': '#eab308',
-  '公關/宣傳': '#a855f7',
-  '營運/交通': '#22c55e',
-  '活動日': '#ec4899'
-}
+  // 顏色映射
+  const stageColors = {
+    '法規/許可': '#8B5CF6',     // 紫色
+    '贊助招商': '#F59E0B',     // 橙色
+    '設計/製作': '#10B981',    // 綠色
+    '公關/宣傳': '#3B82F6',    // 藍色
+    '營運/交通': '#EF4444',    // 紅色
+    '活動日': '#EC4899'        // 粉色
+  };
 
-export default function GanttChart() {
-  const [tasks, setTasks] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [selectedTask, setSelectedTask] = useState(null)
-  const [showIncompleteOnly, setShowIncompleteOnly] = useState(false)
-  const ganttContentRef = useRef(null)
-  const [leftColumnWidth, setLeftColumnWidth] = useState(192) // 12rem = 192px
-  
-  // 可拖動日期光棒相關狀態
-  const [currentViewDate, setCurrentViewDate] = useState(new Date())
-  const [isDragging, setIsDragging] = useState(false)
-  const [dragStartX, setDragStartX] = useState(0)
-  const [dragStartDate, setDragStartDate] = useState(new Date())
-
+  // 獲取任務數據
   useEffect(() => {
-    fetchTasks()
-    
-    // 監聽視窗大小變化，動態調整左側欄寬度
-    const handleResize = () => {
-      if (ganttContentRef.current) {
-        const leftColumn = ganttContentRef.current.querySelector('.w-48')
-        if (leftColumn) {
-          setLeftColumnWidth(leftColumn.offsetWidth)
+    const fetchTasks = async () => {
+      try {
+        setLoading(true);
+        const response = await fetch('/api/tasks');
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
+        const data = await response.json();
+        console.log('獲取的任務數據:', data);
+        setTasks(data);
+      } catch (err) {
+        console.error('獲取任務失敗:', err);
+        setError(err.message);
+      } finally {
+        setLoading(false);
       }
-    }
+    };
 
-    window.addEventListener('resize', handleResize)
-    // 初始化時也執行一次
-    setTimeout(handleResize, 100)
-    
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
+    fetchTasks();
+  }, []);
 
-  const fetchTasks = async () => {
+  // 日期處理函數
+  const parseDate = useCallback((dateStr) => {
+    if (!dateStr) return null;
     try {
-      const response = await fetch(`${API_BASE_URL}/tasks`)
-      if (response.ok) {
-        const data = await response.json()
-        setTasks(data)
-      }
-    } catch (error) {
-      console.error('獲取任務失敗:', error)
-    } finally {
-      setLoading(false)
+      // 處理 YYYY-MM-DD 格式
+      const date = new Date(dateStr + 'T00:00:00');
+      return isNaN(date.getTime()) ? null : date;
+    } catch (e) {
+      console.error('日期解析錯誤:', dateStr, e);
+      return null;
     }
-  }
+  }, []);
 
-  const handleTaskClick = (task) => {
-    setSelectedTask(task)
-  }
-
-  const closeDetailDialog = () => {
-    setSelectedTask(null)
-  }
-
-  // 拖動處理函數
-  const handleMouseDown = (e) => {
-    setIsDragging(true)
-    setDragStartX(e.clientX)
-    setDragStartDate(new Date(currentViewDate))
-    e.preventDefault()
-  }
-
-  const handleMouseMove = useCallback((e) => {
-    if (!isDragging || !ganttContentRef.current) return
-    
-    // 獲取當前的時間範圍
-    const { start: currentStartDate, end: currentEndDate } = getDateRange()
-    
-    // 計算拖動距離
-    const deltaX = e.clientX - dragStartX
-    
-    // 使用固定的30px網格計算（每天30px）
-    const gridWidth = 30
-    const gridsMoved = Math.round(deltaX / gridWidth)
-    const daysMoved = gridsMoved // 每個網格代表1天
-    
-    const newDate = new Date(dragStartDate)
-    newDate.setDate(dragStartDate.getDate() + daysMoved)
-    
-    // 限制在甘特圖範圍內
-    if (newDate >= currentStartDate && newDate <= currentEndDate) {
-      setCurrentViewDate(newDate)
-    }
-  }, [isDragging, dragStartX, dragStartDate, getDateRange])
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false)
-  }, [])
-
-  // 添加全局鼠標事件監聽
-  useEffect(() => {
-    if (isDragging) {
-      document.addEventListener('mousemove', handleMouseMove)
-      document.addEventListener('mouseup', handleMouseUp)
-      return () => {
-        document.removeEventListener('mousemove', handleMouseMove)
-        document.removeEventListener('mouseup', handleMouseUp)
-      }
-    }
-  }, [isDragging, handleMouseMove, handleMouseUp])
-
-  // 計算甘特圖的時間範圍
+  // 計算日期範圍 - 自動延伸到涵蓋所有任務
   const getDateRange = useCallback(() => {
-    if (tasks.length === 0) return { start: new Date(), end: new Date() }
-    
-    const dates = tasks.flatMap(task => [
-      new Date(task.startDate),
-      new Date(task.endDate)
-    ])
-    
-    const start = new Date(Math.min(...dates))
-    const end = new Date(Math.max(...dates))
-    
-    // 添加一些緩衝時間
-    start.setDate(start.getDate() - 7)
-    end.setDate(end.getDate() + 7)
-    
-    return { start, end }
-  }, [tasks])
+    const validTasks = tasks.filter(task => 
+      task.startDate && task.endDate && 
+      parseDate(task.startDate) && parseDate(task.endDate)
+    );
 
-  const { start: startDate, end: endDate } = getDateRange()
-  const totalDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24))
-
-  // 計算任務在甘特圖中的位置和寬度
-  const getTaskPosition = (task) => {
-    const taskStart = new Date(task.startDate)
-    const taskEnd = new Date(task.endDate)
-    
-    // 使用固定的30px網格計算（每天30px）
-    const startDays = Math.floor((taskStart - startDate) / (1000 * 60 * 60 * 24))
-    const endDays = Math.floor((taskEnd - startDate) / (1000 * 60 * 60 * 24))
-    const durationDays = endDays - startDays + 1
-    
-    const gridWidth = 30 // 每天30px
-    const leftPosition = startDays * gridWidth
-    const barWidth = Math.max(durationDays * gridWidth, 30) // 最小寬度30px（一天）
-    
-    return { left: `${leftPosition}px`, width: `${barWidth}px` }
-  }
-
-  // 篩選任務
-  const filteredTasks = showIncompleteOnly 
-    ? tasks.filter(task => !task.completed)
-    : tasks
-
-  // 按類型分組任務
-  const groupedTasks = filteredTasks.reduce((acc, task) => {
-    if (!acc[task.stage]) {
-      acc[task.stage] = []
+    if (validTasks.length === 0) {
+      // 如果沒有有效任務，使用當前日期前後各3個月
+      const today = new Date();
+      const start = new Date(today);
+      start.setMonth(start.getMonth() - 3);
+      start.setDate(1); // 月初
+      const end = new Date(today);
+      end.setMonth(end.getMonth() + 6);
+      end.setDate(0); // 上個月最後一天，即這個月最後一天
+      end.setDate(end.getDate() + 1); // 下個月第一天
+      return { start, end };
     }
-    acc[task.stage].push(task)
-    return acc
-  }, {})
 
-  const totalTasks = filteredTasks.length
-  const totalStages = Object.keys(groupedTasks).length
+    // 找出所有任務的最早和最晚日期
+    const dates = validTasks.flatMap(task => [
+      parseDate(task.startDate),
+      parseDate(task.endDate)
+    ]).filter(Boolean);
+
+    const minDate = new Date(Math.min(...dates));
+    const maxDate = new Date(Math.max(...dates));
+
+    // 自動添加緩衝時間：前後各加1個月
+    const start = new Date(minDate);
+    start.setMonth(start.getMonth() - 1);
+    start.setDate(1); // 設為月初
+    
+    const end = new Date(maxDate);
+    end.setMonth(end.getMonth() + 1);
+    end.setDate(0); // 設為上個月最後一天
+    end.setDate(end.getDate() + 1); // 下個月第一天
+
+    console.log('自動計算時間範圍:', {
+      原始最早: minDate.toDateString(),
+      原始最晚: maxDate.toDateString(),
+      緩衝後開始: start.toDateString(),
+      緩衝後結束: end.toDateString(),
+      總天數: Math.ceil((end - start) / (1000 * 60 * 60 * 24))
+    });
+
+    return { start, end };
+  }, [tasks, parseDate]);
+
+  // 計算總天數
+  const getTotalDays = useCallback(() => {
+    const { start, end } = getDateRange();
+    return Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+  }, [getDateRange]);
+
+  // 計算日期到像素的轉換
+  const dateToPixel = useCallback((date) => {
+    if (!date) return 0;
+    const { start } = getDateRange();
+    const daysDiff = Math.floor((date - start) / (1000 * 60 * 60 * 24));
+    const leftPanelWidth = 200; // 左側面板寬度
+    const dayWidth = 30; // 每天30像素
+    return leftPanelWidth + (daysDiff * dayWidth);
+  }, [getDateRange]);
+
+  // 生成智能時間軸標籤 - 自動適應時間範圍
+  const generateTimeLabels = useCallback(() => {
+    const { start, end } = getDateRange();
+    const labels = [];
+    const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+    
+    // 根據時間跨度決定標籤密度
+    let labelInterval;
+    if (totalDays <= 60) {
+      labelInterval = 7; // 2個月內：每週
+    } else if (totalDays <= 180) {
+      labelInterval = 14; // 6個月內：每兩週
+    } else if (totalDays <= 365) {
+      labelInterval = 30; // 1年內：每月
+    } else {
+      labelInterval = 60; // 超過1年：每兩個月
+    }
+
+    console.log(`時間跨度: ${totalDays}天，標籤間隔: ${labelInterval}天`);
+
+    // 生成基礎時間標籤
+    const current = new Date(start);
+    while (current <= end) {
+      labels.push({
+        date: new Date(current),
+        label: `${String(current.getMonth() + 1).padStart(2, '0')}/${String(current.getDate()).padStart(2, '0')}`,
+        x: dateToPixel(current),
+        isRegular: true
+      });
+      current.setDate(current.getDate() + labelInterval);
+    }
+
+    // 收集重要日期（任務的開始和結束日期）
+    const importantDates = new Set();
+    tasks.forEach(task => {
+      const startDate = parseDate(task.startDate);
+      const endDate = parseDate(task.endDate);
+      if (startDate && startDate >= start && startDate <= end) {
+        importantDates.add(startDate.toDateString());
+      }
+      if (endDate && endDate >= start && endDate <= end) {
+        importantDates.add(endDate.toDateString());
+      }
+    });
+
+    console.log('重要日期數量:', importantDates.size);
+
+    // 添加重要日期標籤（如果不與現有標籤重疊）
+    importantDates.forEach(dateStr => {
+      const date = new Date(dateStr);
+      
+      // 檢查是否與現有標籤太接近（3天內）
+      const tooClose = labels.some(label => 
+        Math.abs(label.date.getTime() - date.getTime()) < 3 * 24 * 60 * 60 * 1000
+      );
+      
+      if (!tooClose) {
+        labels.push({
+          date: new Date(date),
+          label: `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`,
+          x: dateToPixel(date),
+          isImportant: true
+        });
+        console.log('添加重要日期標籤:', date.toDateString());
+      }
+    });
+
+    // 按日期排序
+    const sortedLabels = labels.sort((a, b) => a.date.getTime() - b.date.getTime());
+    console.log('總標籤數:', sortedLabels.length);
+    
+    return sortedLabels;
+  }, [getDateRange, dateToPixel, tasks, parseDate]);
+
+  // 過濾任務
+  const filteredTasks = tasks.filter(task => {
+    if (!showOnlyIncomplete) return true;
+    return !task.completed;
+  });
+
+  // 按階段分組任務
+  const groupedTasks = filteredTasks.reduce((groups, task) => {
+    const stage = task.stage || '未分類';
+    if (!groups[stage]) {
+      groups[stage] = [];
+    }
+    groups[stage].push(task);
+    return groups;
+  }, {});
+
+  // 計算今天線的位置
+  const todayLinePosition = dateToPixel(currentDate);
+
+  // 滾動同步
+  const handleScroll = useCallback((e) => {
+    if (timelineRef.current && chartRef.current) {
+      if (e.target === chartRef.current) {
+        timelineRef.current.scrollLeft = e.target.scrollLeft;
+      } else if (e.target === timelineRef.current) {
+        chartRef.current.scrollLeft = e.target.scrollLeft;
+      }
+    }
+  }, []);
+
+  // 渲染任務條
+  const renderTaskBar = (task) => {
+    const startDate = parseDate(task.startDate);
+    const endDate = parseDate(task.endDate);
+    
+    if (!startDate || !endDate) {
+      return null;
+    }
+
+    const startX = dateToPixel(startDate);
+    const endX = dateToPixel(endDate);
+    const width = Math.max(endX - startX, 10); // 最小寬度10px
+    const color = stageColors[task.stage] || '#6B7280';
+
+    return (
+      <div
+        key={task.id}
+        className="task-bar"
+        style={{
+          position: 'absolute',
+          left: `${startX}px`,
+          width: `${width}px`,
+          height: '20px',
+          backgroundColor: color,
+          borderRadius: '4px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'white',
+          fontSize: '12px',
+          fontWeight: '500',
+          overflow: 'hidden',
+          whiteSpace: 'nowrap',
+          textOverflow: 'ellipsis',
+          padding: '0 4px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+          cursor: 'pointer'
+        }}
+        title={`${task.milestone}\n${task.startDate} - ${task.endDate}`}
+      >
+        {task.milestone}
+      </div>
+    );
+  };
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-64">
-        <div className="text-lg text-gray-600">載入中...</div>
+      <div className="flex items-center justify-center h-64">
+        <div className="text-lg">載入中...</div>
       </div>
-    )
+    );
   }
 
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-red-500">錯誤: {error}</div>
+      </div>
+    );
+  }
+
+  const totalDays = getTotalDays();
+  const chartWidth = 200 + (totalDays * 30); // 左側面板 + 時間軸寬度
+  const timeLabels = generateTimeLabels();
+
   return (
-    <div className="bg-white rounded-lg shadow-sm border">
-      <div className="p-6 border-b">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-bold text-gray-800">甘特圖視圖</h2>
-          <Button
-            onClick={() => setShowIncompleteOnly(!showIncompleteOnly)}
-            variant={showIncompleteOnly ? "default" : "outline"}
-            className={showIncompleteOnly ? "bg-blue-600 hover:bg-blue-700" : ""}
+    <div className="gantt-chart w-full h-full bg-white">
+      {/* 標題和控制項 */}
+      <div className="flex items-center justify-between p-4 border-b">
+        <h2 className="text-xl font-bold">甘特圖視圖</h2>
+        <button
+          onClick={() => setShowOnlyIncomplete(!showOnlyIncomplete)}
+          className={`px-4 py-2 rounded ${
+            showOnlyIncomplete 
+              ? 'bg-blue-500 text-white' 
+              : 'bg-gray-200 text-gray-700'
+          }`}
+        >
+          只顯示未完成項目
+        </button>
+      </div>
+
+      {/* 時間軸 */}
+      <div 
+        ref={timelineRef}
+        className="timeline-header border-b bg-gray-50 overflow-x-auto"
+        style={{ height: '40px' }}
+        onScroll={handleScroll}
+      >
+        <div 
+          className="relative"
+          style={{ width: `${chartWidth}px`, height: '40px' }}
+        >
+          {/* 左側空白區域 */}
+          <div 
+            className="absolute top-0 left-0 bg-gray-100 border-r flex items-center justify-center font-semibold"
+            style={{ width: '200px', height: '40px' }}
           >
-            {showIncompleteOnly ? "顯示所有項目" : "只顯示未完成項目"}
-          </Button>
-        </div>
-        
-        <div className="flex gap-6 text-sm text-gray-600">
-          <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4" />
-            總計 {totalTasks} 個項目
+            時間軸
           </div>
-          <div className="flex items-center gap-2">
-            <Users className="w-4 h-4" />
-            類型 {totalStages} 個
+          
+          {/* 時間標籤 */}
+          {timeLabels.map((label, index) => (
+            <div
+              key={index}
+              className={`absolute top-0 flex items-center justify-center text-sm font-medium border-l border-gray-300 ${
+                label.isImportant ? 'bg-yellow-100 border-yellow-400' : ''
+              }`}
+              style={{
+                left: `${label.x}px`,
+                width: label.isImportant ? '80px' : '120px', // 重要日期標籤稍窄
+                height: '40px'
+              }}
+            >
+              <span className={label.isImportant ? 'text-yellow-800 font-bold text-xs' : 'text-gray-700'}>
+                {label.label}
+              </span>
+            </div>
+          ))}
+          
+          {/* 今天線標籤 */}
+          <div
+            className="absolute top-0 flex items-center justify-center"
+            style={{
+              left: `${todayLinePosition - 15}px`,
+              width: '30px',
+              height: '40px'
+            }}
+          >
+            <div className="bg-red-500 text-white text-xs px-1 py-0.5 rounded">
+              8/15
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="p-6">
-        {/* 圖例 */}
-        <div className="mb-6">
-          <h3 className="text-lg font-semibold mb-3">類型圖例</h3>
-          <div className="flex flex-wrap gap-4">
-            {Object.entries(STAGE_COLORS).map(([stage, color]) => (
-              <div key={stage} className="flex items-center gap-2">
-                <div 
-                  className="w-4 h-4 rounded"
-                  style={{ backgroundColor: color }}
-                />
-                <span className="text-sm text-gray-700">{stage}</span>
-              </div>
+      {/* 甘特圖主體 */}
+      <div 
+        ref={chartRef}
+        className="gantt-body overflow-auto"
+        style={{ height: 'calc(100vh - 200px)' }}
+        onScroll={handleScroll}
+      >
+        <div 
+          className="relative"
+          style={{ width: `${chartWidth}px` }}
+        >
+          {/* 網格線 */}
+          <div className="absolute inset-0">
+            {Array.from({ length: totalDays }, (_, i) => (
+              <div
+                key={i}
+                className="absolute top-0 bottom-0 border-l border-gray-200"
+                style={{ left: `${200 + (i * 30)}px` }}
+              />
             ))}
           </div>
-        </div>
 
-        {/* 甘特圖 */}
-        <div className="overflow-x-auto">
-          <div className="min-w-[800px]">
-            {/* 時間軸標題 */}
-            <div className="flex border-b bg-gray-50">
-              <div className="w-48 font-medium text-gray-700 p-2">項目名稱</div>
-              <div className="flex-1 font-medium text-gray-700">
-                <div className="text-center p-2 border-b">時間軸</div>
-                <div className="flex" style={{ minWidth: `${totalDays * 30}px` }}>
-                  {Array.from({ length: totalDays }, (_, dayIndex) => {
-                    const currentDay = new Date(startDate)
-                    currentDay.setDate(startDate.getDate() + dayIndex)
-                    return (
-                      <div 
-                        key={dayIndex} 
-                        className="text-xs text-gray-600 p-1 border-r text-center"
-                        style={{ 
-                          width: '30px',
-                          minWidth: '30px'
-                        }}
-                      >
-                        {currentDay.toLocaleDateString('zh-TW', { 
-                          month: '2-digit', 
-                          day: '2-digit' 
-                        })}
-                      </div>
-                    )
-                  })}
+          {/* 今天線 */}
+          <div
+            className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10"
+            style={{ left: `${todayLinePosition}px` }}
+          />
+
+          {/* 任務行 */}
+          {Object.entries(groupedTasks).map(([stage, stageTasks], stageIndex) => (
+            <div key={stage}>
+              {/* 階段標題 */}
+              <div 
+                className="flex items-center border-b bg-gray-50"
+                style={{ height: '40px' }}
+              >
+                <div 
+                  className="flex items-center px-4 font-semibold border-r"
+                  style={{ width: '200px' }}
+                >
+                  <div
+                    className="w-3 h-3 rounded mr-2"
+                    style={{ backgroundColor: stageColors[stage] || '#6B7280' }}
+                  />
+                  {stage} ({stageTasks.length}個項目)
                 </div>
               </div>
-            </div>
 
-            {/* 甘特圖內容 */}
-            <div className="space-y-1 relative" ref={ganttContentRef}>
-              {/* 可拖動日期光棒 */}
-              {(() => {
-                const viewDate = new Date(currentViewDate)
-                viewDate.setHours(0, 0, 0, 0)
-                
-                if (viewDate >= startDate && viewDate <= endDate) {
-                  // 計算光棒位置：相對於父容器（每天30px）
-                  const daysFromStart = Math.floor((viewDate - startDate) / (1000 * 60 * 60 * 24))
-                  const gridWidth = 30 // 每天30px
-                  const lightbarPosition = leftColumnWidth + (daysFromStart * gridWidth) + (gridWidth / 2) // 置中對齊
-                  
-                  return (
-                    <div 
-                      key={`lightbar-${viewDate.getTime()}`}
-                      className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 cursor-col-resize"
-                      style={{ 
-                        left: `${lightbarPosition}px`
-                      }}
-                      onMouseDown={handleMouseDown}
-                      title={`查看日期: ${viewDate.toLocaleDateString('zh-TW')} - 可拖動`}
-                    >
-                      <div 
-                        className="absolute -top-2 -left-8 bg-red-500 text-white text-xs px-2 py-1 rounded whitespace-nowrap cursor-grab active:cursor-grabbing select-none"
-                        style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
-                      >
-                        {viewDate.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' })}
-                      </div>
-                    </div>
-                  )
-                }
-                return null
-              })()}
-              
-              {Object.entries(groupedTasks).map(([stage, stageTasks]) => (
-                <div key={stage}>
-                  {/* 類型標題 */}
-                  <div className="flex bg-gray-100 p-2 font-medium text-gray-800">
-                    <div className="w-48">{stage} ({stageTasks.length}個項目)</div>
-                    <div className="flex-1"></div>
+              {/* 任務列表 */}
+              {stageTasks.map((task, taskIndex) => (
+                <div 
+                  key={task.id}
+                  className="flex items-center border-b hover:bg-gray-50"
+                  style={{ height: '40px' }}
+                >
+                  {/* 任務名稱 */}
+                  <div 
+                    className="flex items-center px-4 border-r text-sm"
+                    style={{ width: '200px' }}
+                  >
+                    {task.milestone}
                   </div>
-                  
-                  {/* 該類型的任務 */}
-                  {stageTasks.map((task, index) => {
-                    const position = getTaskPosition(task)
-                    const color = STAGE_COLORS[task.stage] || '#6b7280'
-                    
-                    return (
-                      <div key={task.id} className="flex border-b hover:bg-gray-50">
-                        <div className="w-48 p-2 text-sm text-gray-700 border-r">
-                          {task.milestone}
-                        </div>
-                        <div className="flex-1 relative h-8 p-1">
-                          <div
-                            className="absolute h-6 rounded cursor-pointer hover:opacity-80 transition-opacity flex items-center px-2"
-                            style={{
-                              backgroundColor: color,
-                              left: position.left,
-                              width: position.width,
-                              minWidth: '30px'
-                            }}
-                            onClick={() => handleTaskClick(task)}
-                            title={`${task.milestone} (${task.startDate} - ${task.endDate})`}
-                          >
-                            <span className="text-white text-xs font-medium truncate">
-                              {task.milestone}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
+
+                  {/* 任務條區域 */}
+                  <div className="relative flex-1" style={{ height: '40px' }}>
+                    {renderTaskBar(task)}
+                  </div>
                 </div>
               ))}
             </div>
-          </div>
-        </div>
-
-        {/* 統計資訊 */}
-        <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-          <h3 className="font-semibold mb-2">統計資訊</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div>
-              <span className="text-gray-600">總項目數：</span>
-              <span className="font-medium">{totalTasks}</span>
-            </div>
-            <div>
-              <span className="text-gray-600">類型數：</span>
-              <span className="font-medium">{totalStages}</span>
-            </div>
-            <div>
-              <span className="text-gray-600">開始日期：</span>
-              <span className="font-medium">{startDate.toLocaleDateString()}</span>
-            </div>
-            <div>
-              <span className="text-gray-600">結束日期：</span>
-              <span className="font-medium">{endDate.toLocaleDateString()}</span>
-            </div>
-          </div>
+          ))}
         </div>
       </div>
 
-      {/* 詳細資訊對話框 */}
-      {selectedTask && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xl font-bold">項目詳細資訊</h3>
-              <Button
-                onClick={closeDetailDialog}
-                variant="outline"
-                size="sm"
-              >
-                <X className="w-4 h-4" />
-              </Button>
+      {/* 圖例 */}
+      <div className="border-t p-4 bg-gray-50">
+        <div className="flex flex-wrap gap-4">
+          {Object.entries(stageColors).map(([stage, color]) => (
+            <div key={stage} className="flex items-center">
+              <div
+                className="w-4 h-4 rounded mr-2"
+                style={{ backgroundColor: color }}
+              />
+              <span className="text-sm">{stage}</span>
             </div>
+          ))}
+        </div>
+      </div>
 
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">類型</label>
-                  <div className={`inline-block px-3 py-1 rounded-full text-sm font-medium`}
-                       style={{ 
-                         backgroundColor: STAGE_COLORS[selectedTask.stage] || '#6b7280',
-                         color: 'white'
-                       }}>
-                    {selectedTask.stage}
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">項目名稱</label>
-                  <p className="text-gray-900 font-medium">{selectedTask.milestone}</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">開始日期</label>
-                  <p className="text-gray-900">{selectedTask.startDate}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">結束日期</label>
-                  <p className="text-gray-900">{selectedTask.endDate}</p>
-                </div>
-              </div>
-
-              {selectedTask.description && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">內容說明</label>
-                  <p className="text-gray-900 bg-gray-50 p-3 rounded">{selectedTask.description}</p>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-4">
-                {selectedTask.holidayImpact && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">假期影響</label>
-                    <p className="text-gray-900">{selectedTask.holidayImpact}</p>
-                  </div>
-                )}
-                {selectedTask.dependencies && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">相依關係</label>
-                    <p className="text-gray-900">{selectedTask.dependencies}</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                {selectedTask.responsible && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">負責單位/人</label>
-                    <p className="text-gray-900">{selectedTask.responsible}</p>
-                  </div>
-                )}
-                {selectedTask.risks && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">風險/備註</label>
-                    <p className="text-gray-900">{selectedTask.risks}</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex justify-end mt-6">
-              <Button onClick={closeDetailDialog}>
-                關閉
-              </Button>
-            </div>
+      {/* 統計資訊 */}
+      <div className="border-t p-4 bg-white">
+        <div className="grid grid-cols-4 gap-4 text-sm">
+          <div>
+            <span className="font-semibold">總項目數：</span>
+            {filteredTasks.length}
+          </div>
+          <div>
+            <span className="font-semibold">類型數：</span>
+            {Object.keys(groupedTasks).length}
+          </div>
+          <div>
+            <span className="font-semibold">開始日期：</span>
+            {getDateRange().start.toLocaleDateString('zh-TW')}
+          </div>
+          <div>
+            <span className="font-semibold">結束日期：</span>
+            {getDateRange().end.toLocaleDateString('zh-TW')}
           </div>
         </div>
-      )}
+      </div>
     </div>
-  )
-}
+  );
+};
+
+export default GanttChart;
 
